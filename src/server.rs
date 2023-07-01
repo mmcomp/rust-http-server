@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 #[allow(dead_code)]
 use std::{
-    fs,
-    io::{prelude::*, BufReader},
+    io::prelude::*,
     net::{TcpListener, TcpStream},
 };
 
@@ -14,6 +13,7 @@ pub struct HttpRequest {
     pub base_url: String,
     pub headers: HashMap<String, String>,
     pub params: HashMap<String, String>,
+    pub raw_body: String,
 }
 
 pub struct HttpServer {
@@ -21,7 +21,7 @@ pub struct HttpServer {
     routes: HashMap<String, fn(&HttpRequest) -> String>,
 }
 impl HttpServer {
-    fn get_method_path(&self, first_line_option: Option<&String>) -> (String, String, String) {
+    fn get_method_path(&self, first_line_option: Option<&&str>) -> (String, String, String) {
         Option::expect(first_line_option, "Bad Request!");
         let first_line = match first_line_option {
             Some(value) => value,
@@ -67,11 +67,14 @@ impl HttpServer {
         }
     }
 
-    fn get_headers(&mut self, http_raw_request: Vec<String>, http_request: &mut HttpRequest) {
+    fn get_headers(&mut self, http_raw_request: Vec<&str>, http_request: &mut HttpRequest) {
         let mut indx = 0;
 
-        for ln in http_raw_request {
+        for ln in http_raw_request.clone() {
             if indx > 0 {
+                if ln == "" {
+                    break;
+                }
                 let col: Vec<&str> = ln.split(": ").collect();
                 let key: String = match col.get(0) {
                     Some(val) => val.to_string(),
@@ -87,6 +90,9 @@ impl HttpServer {
             }
             indx += 1;
         }
+        if http_raw_request[http_raw_request.len() - 2] == "" {
+            http_request.raw_body = http_raw_request[http_raw_request.len() - 1].replace("\0", "").to_owned();
+        }
         http_request.base_url = match http_request.headers.get("Host") {
             Some(host) => host.to_string(),
             None => "".to_owned(),
@@ -95,7 +101,7 @@ impl HttpServer {
 
     fn get_rout(
         &mut self,
-        http_raw_request: &Vec<String>,
+        http_raw_request: &Vec<&str>,
         http_request: &mut HttpRequest,
     ) -> &fn(&HttpRequest) -> String {
         let first_line_option = http_raw_request.get(0);
@@ -108,19 +114,26 @@ impl HttpServer {
 
         self.parse_query_string(http_request);
 
-        if self.routes.get(&http_request.path).is_none() {
-            return self.routes.get("/").unwrap();
+        let mut method_path = http_request.method.clone();
+        method_path.push_str(":");
+        method_path.push_str(&http_request.path.clone());
+        if self.routes.get(&method_path).is_none() {
+            method_path = ":".to_owned();
+            method_path.push_str(&http_request.path.clone());
+            if self.routes.get(&method_path).is_none() {
+                return self.routes.get(":/").unwrap();
+            }
         }
-        self.routes.get(&http_request.path).unwrap()
+        self.routes.get(&method_path).unwrap()
     }
 
     fn handle_connection(&mut self, mut stream: TcpStream) {
-        let buf_reader = BufReader::new(&mut stream);
-        let http_raw_request: Vec<_> = buf_reader
-            .lines()
-            .map(|result| result.unwrap())
-            .take_while(|line| !line.is_empty())
-            .collect();
+        let mut buffer = [0; 1024];
+        stream.read(&mut buffer).unwrap();
+        use std::str;
+        let x = str::from_utf8(&buffer).unwrap();
+
+        let http_raw_request: Vec<&str> = x.split("\r\n").collect();
 
         let mut request = HttpRequest {
             method: "".to_owned(),
@@ -129,18 +142,13 @@ impl HttpServer {
             base_url: "".to_owned(),
             headers: HashMap::new(),
             params: HashMap::new(),
+            raw_body: "".to_owned(),
         };
         let handler = self.get_rout(&http_raw_request, &mut request);
         let handler_content = handler(&request);
-        println!(
-            "Handler for route '{}' => '{}'",
-            request.path, handler_content
-        );
 
         let status_line = "HTTP/1.1 200 OK";
-        let contents = fs::read_to_string("hello.html")
-            .unwrap()
-            .replace("#CONTENT#", &handler_content);
+        let contents = handler_content;
         let length = contents.len();
 
         let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{contents}");
@@ -158,8 +166,13 @@ impl HttpServer {
         }
     }
 
-    pub fn register_route(&mut self, route: String, handler: fn(&HttpRequest) -> String) {
-        self.routes.insert(route, handler);
+    pub fn register_route(
+        &mut self,
+        method: String,
+        route: String,
+        handler: fn(&HttpRequest) -> String,
+    ) {
+        self.routes.insert(method + ":" + &route, handler);
     }
 
     pub fn new(addr: String) -> HttpServer {
