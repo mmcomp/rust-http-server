@@ -16,9 +16,11 @@ pub struct HttpRequest {
     pub raw_body: String,
 }
 
+#[derive(Debug)]
+#[derive(PartialEq)]
 pub struct HttpServer {
-    addr: String,
-    routes: HashMap<String, fn(&HttpRequest) -> String>,
+    pub addr: String,
+    pub routes: HashMap<String, fn(&HttpRequest) -> String>,
 }
 impl HttpServer {
     fn get_method_path(&self, first_line_option: Option<&&str>) -> (String, String, String) {
@@ -29,15 +31,15 @@ impl HttpServer {
         };
         let parts = first_line.split(" ");
         let mut method: &str = "";
-        let mut indx = 0;
+        let mut index = 0;
         let mut path: &str = "";
         for part in parts {
-            match indx {
+            match index {
                 0 => method = part,
                 1 => path = part,
                 _ => (),
             };
-            indx = indx + 1;
+            index = index + 1;
         }
 
         let path_split: Vec<&str> = path.split("?").collect();
@@ -68,10 +70,10 @@ impl HttpServer {
     }
 
     fn get_headers(&mut self, http_raw_request: Vec<&str>, http_request: &mut HttpRequest) {
-        let mut indx = 0;
+        let mut index = 0;
 
         for ln in http_raw_request.clone() {
-            if indx > 0 {
+            if index > 0 {
                 if ln == "" {
                     break;
                 }
@@ -88,7 +90,7 @@ impl HttpServer {
                     http_request.headers.insert(key, value);
                 }
             }
-            indx += 1;
+            index += 1;
         }
         if http_raw_request[http_raw_request.len() - 2] == "" {
             http_request.raw_body = http_raw_request[http_raw_request.len() - 1].replace("\0", "").to_owned();
@@ -121,7 +123,7 @@ impl HttpServer {
             method_path = ":".to_owned();
             method_path.push_str(&http_request.path.clone());
             if self.routes.get(&method_path).is_none() {
-                return self.routes.get(":/").unwrap();
+                return self.routes.get("default:").unwrap();
             }
         }
         self.routes.get(&method_path).unwrap()
@@ -175,10 +177,13 @@ impl HttpServer {
         self.routes.insert(method + ":" + &route, handler);
     }
 
-    pub fn new(addr: String) -> HttpServer {
-        HttpServer {
+    pub fn new(addr: String, default_route: fn(&HttpRequest) -> String,) -> HttpServer {
+        let mut server = HttpServer {
             addr,
             routes: HashMap::new(),
-        }
+        };
+        server.register_route("default".to_owned(), "".to_owned(), default_route);
+
+        server
     }
 }
